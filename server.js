@@ -25,10 +25,9 @@ app.use(express.json());
 // Handle preflight requests
 app.options('*', cors(corsOptions));
 
-// Initialize Firebase Admin - SIMPLIFIED APPROACH
+// Initialize Firebase Admin
 console.log('Initializing Firebase Admin...');
 
-// Method 1: Use environment variable for the entire service account JSON
 if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
   console.log('Using FIREBASE_SERVICE_ACCOUNT_JSON environment variable');
   const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
@@ -36,9 +35,7 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
     credential: admin.credential.cert(serviceAccount),
     databaseURL: "https://opportunity-9d3bf-default-rtdb.firebaseio.com"
   });
-} 
-// Method 2: Use individual environment variables
-else if (process.env.FIREBASE_PRIVATE_KEY) {
+} else if (process.env.FIREBASE_PRIVATE_KEY) {
   console.log('Using individual Firebase environment variables');
   const serviceAccount = {
     type: "service_account",
@@ -59,7 +56,6 @@ else if (process.env.FIREBASE_PRIVATE_KEY) {
   });
 } else {
   console.log('No Firebase credentials found. Using default initialization (for testing only)');
-  // This will only work if you're using Google Cloud environment with automatic credentials
   admin.initializeApp({
     credential: admin.credential.applicationDefault(),
     databaseURL: "https://opportunity-9d3bf-default-rtdb.firebaseio.com"
@@ -69,10 +65,10 @@ else if (process.env.FIREBASE_PRIVATE_KEY) {
 const db = admin.database();
 console.log('Firebase Admin initialized successfully');
 
-// Function to auto-confirm delivered orders after 24 hours
+// Function to auto-confirm delivered orders after 14 days
 async function autoConfirmDeliveredOrders() {
   try {
-    console.log('🔍 Checking for orders to auto-confirm...');
+    console.log('🔍 Checking for delivered orders older than 14 days...');
     
     const snapshot = await db.ref('smartfit_AR_Database/transactions').once('value');
     const transactions = snapshot.val();
@@ -83,7 +79,7 @@ async function autoConfirmDeliveredOrders() {
     }
 
     const currentTime = Date.now();
-    const twentyFourHours = 24 * 60 * 60 * 1000;
+    const fourteenDays = 14 * 24 * 60 * 60 * 1000; // 14 days in milliseconds
 
     let confirmedCount = 0;
 
@@ -91,7 +87,7 @@ async function autoConfirmDeliveredOrders() {
       for (const orderId in transactions[userId]) {
         const order = transactions[userId][orderId];
         
-        // Check if order status is "delivered"
+        // Check if order status is "delivered" (not already completed)
         if (order.status && order.status.toLowerCase() === 'delivered') {
           // Check if we have status updates
           if (order.statusUpdates) {
@@ -103,9 +99,10 @@ async function autoConfirmDeliveredOrders() {
             if (deliveredUpdate && deliveredUpdate.timestamp) {
               const timeSinceDelivered = currentTime - deliveredUpdate.timestamp;
               
-              // If it's been more than 24 hours since delivery
-              if (timeSinceDelivered > twentyFourHours) {
+              // If it's been more than 14 days since delivery
+              if (timeSinceDelivered > fourteenDays) {
                 console.log(`🔄 Auto-confirming order ${orderId} for user ${userId}`);
+                console.log(`⏰ Order delivered ${Math.round(timeSinceDelivered / (24 * 60 * 60 * 1000))} days ago`);
                 
                 // Generate unique ID for the auto-confirmation update
                 const autoConfirmId = generateId();
@@ -115,19 +112,23 @@ async function autoConfirmDeliveredOrders() {
                 await db.ref(`smartfit_AR_Database/transactions/${userId}/${orderId}/statusUpdates/${autoConfirmId}`).set({
                   status: 'completed',
                   timestamp: autoConfirmTimestamp,
-                  message: 'Order automatically confirmed as completed after 24 hours of delivery',
+                  message: 'Order automatically confirmed as completed after 14 days of delivery',
                   location: 'System Auto-Confirm',
                   addedBy: 'System',
                   addedById: 'auto-confirm-system',
                   createdAt: new Date().toISOString(),
-                  isAutoConfirmed: true
+                  isAutoConfirmed: true,
+                  daysSinceDelivery: Math.round(timeSinceDelivered / (24 * 60 * 60 * 1000))
                 });
                 
                 // Update main order status to "completed"
                 await db.ref(`smartfit_AR_Database/transactions/${userId}/${orderId}/status`).set('completed');
                 
-                console.log(`✅ Order ${orderId} auto-confirmed as completed`);
+                console.log(`✅ Order ${orderId} auto-confirmed as completed after 14 days`);
                 confirmedCount++;
+              } else {
+                const daysRemaining = Math.ceil((fourteenDays - timeSinceDelivered) / (24 * 60 * 60 * 1000));
+                console.log(`⏳ Order ${orderId} delivered ${Math.round(timeSinceDelivered / (24 * 60 * 60 * 1000))} days ago - ${daysRemaining} days remaining until auto-completion`);
               }
             }
           }
@@ -135,11 +136,60 @@ async function autoConfirmDeliveredOrders() {
       }
     }
     
-    console.log(`✅ Auto-confirmation check completed. ${confirmedCount} orders confirmed.`);
+    console.log(`✅ Auto-confirmation check completed. ${confirmedCount} orders confirmed after 14 days.`);
     return { success: true, confirmedCount };
   } catch (error) {
     console.error('❌ Error in auto-confirm function:', error);
     throw error;
+  }
+}
+
+// Function to get statistics about orders
+async function getOrderStatistics() {
+  try {
+    const snapshot = await db.ref('smartfit_AR_Database/transactions').once('value');
+    const transactions = snapshot.val();
+    
+    if (!transactions) {
+      return { totalOrders: 0, deliveredOrders: 0, pendingAutoConfirm: 0 };
+    }
+
+    const currentTime = Date.now();
+    const fourteenDays = 14 * 24 * 60 * 60 * 1000;
+    
+    let totalOrders = 0;
+    let deliveredOrders = 0;
+    let pendingAutoConfirm = 0;
+
+    for (const userId in transactions) {
+      for (const orderId in transactions[userId]) {
+        totalOrders++;
+        const order = transactions[userId][orderId];
+        
+        if (order.status && order.status.toLowerCase() === 'delivered') {
+          deliveredOrders++;
+          
+          if (order.statusUpdates) {
+            const statusUpdates = Object.values(order.statusUpdates);
+            const deliveredUpdate = statusUpdates.find(update => 
+              update.status && update.status.toLowerCase() === 'delivered'
+            );
+
+            if (deliveredUpdate && deliveredUpdate.timestamp) {
+              const timeSinceDelivered = currentTime - deliveredUpdate.timestamp;
+              if (timeSinceDelivered < fourteenDays) {
+                pendingAutoConfirm++;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return { totalOrders, deliveredOrders, pendingAutoConfirm };
+  } catch (error) {
+    console.error('Error getting order statistics:', error);
+    return { totalOrders: 0, deliveredOrders: 0, pendingAutoConfirm: 0 };
   }
 }
 
@@ -149,8 +199,8 @@ function generateId() {
          Math.random().toString(36).substring(2, 15);
 }
 
-// Schedule the task to run every hour
-cron.schedule('0 * * * *', () => {
+// Schedule the task to run every 6 hours (more efficient for 14-day window)
+cron.schedule('0 */6 * * *', () => {
   console.log('⏰ Scheduled auto-confirm job running...');
   autoConfirmDeliveredOrders().catch(console.error);
 });
@@ -163,6 +213,22 @@ app.post('/trigger-auto-confirm', async (req, res) => {
       success: true, 
       message: 'Auto-confirmation triggered manually',
       confirmedCount: result.confirmedCount,
+      timeframe: '14 days',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get order statistics endpoint
+app.get('/statistics', async (req, res) => {
+  try {
+    const stats = await getOrderStatistics();
+    res.json({
+      success: true,
+      statistics: stats,
+      timeframe: '14 days auto-confirm',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -176,19 +242,27 @@ app.get('/health', (req, res) => {
     status: 'OK', 
     timestamp: new Date().toISOString(),
     service: 'Auto-Confirm Delivery Service',
-    domain: 'smart-fit-ar.vercel.app'
+    domain: 'smart-fit-ar.vercel.app',
+    timeframe: '14 days auto-completion'
   });
 });
 
 // Get service status
-app.get('/status', (req, res) => {
-  res.json({
-    service: 'Auto-Confirm Delivery Service',
-    status: 'running',
-    nextRun: 'Every hour at minute 0',
-    supportedDomains: ['https://smart-fit-ar.vercel.app'],
-    timestamp: new Date().toISOString()
-  });
+app.get('/status', async (req, res) => {
+  try {
+    const stats = await getOrderStatistics();
+    res.json({
+      service: 'Auto-Confirm Delivery Service',
+      status: 'running',
+      nextRun: 'Every 6 hours',
+      timeframe: '14 days after delivery',
+      supportedDomains: ['https://smart-fit-ar.vercel.app'],
+      statistics: stats,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // Test endpoint to verify CORS is working
@@ -196,13 +270,15 @@ app.get('/test-cors', (req, res) => {
   res.json({
     message: 'CORS is working!',
     yourDomain: 'smart-fit-ar.vercel.app',
+    timeframe: '14 days auto-completion',
     timestamp: new Date().toISOString()
   });
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`⏰ Auto-confirm service started - will check every hour`);
+  console.log(`⏰ Auto-confirm service started - will check every 6 hours`);
+  console.log(`📅 Timeframe: 14 days after delivery`);
   console.log(`🌐 CORS enabled for: https://smart-fit-ar.vercel.app`);
 });
 
