@@ -6,6 +6,10 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// SCHEDULE CONFIGURATION - MODIFY THESE VALUES AS NEEDED
+const CHECK_INTERVAL = '*/5 * * * *';      // Every 5 minutes
+const AUTO_UPDATE_INTERVAL = '*/20 * * * *'; // Every 20 minutes
+
 // CORS configuration for your domain
 const corsOptions = {
   origin: [
@@ -82,9 +86,11 @@ async function autoConfirmDeliveredOrders() {
     const fourteenDays = 14 * 24 * 60 * 60 * 1000; // 14 days in milliseconds
 
     let confirmedCount = 0;
+    let checkedCount = 0;
 
     for (const userId in transactions) {
       for (const orderId in transactions[userId]) {
+        checkedCount++;
         const order = transactions[userId][orderId];
         
         // Check if order status is "delivered" (not already completed)
@@ -128,7 +134,9 @@ async function autoConfirmDeliveredOrders() {
                 confirmedCount++;
               } else {
                 const daysRemaining = Math.ceil((fourteenDays - timeSinceDelivered) / (24 * 60 * 60 * 1000));
-                console.log(`⏳ Order ${orderId} delivered ${Math.round(timeSinceDelivered / (24 * 60 * 60 * 1000))} days ago - ${daysRemaining} days remaining until auto-completion`);
+                if (timeSinceDelivered > (13 * 24 * 60 * 60 * 1000)) { // Only log if close to 14 days
+                  console.log(`⏳ Order ${orderId} delivered ${Math.round(timeSinceDelivered / (24 * 60 * 60 * 1000))} days ago - ${daysRemaining} days remaining until auto-completion`);
+                }
               }
             }
           }
@@ -136,8 +144,8 @@ async function autoConfirmDeliveredOrders() {
       }
     }
     
-    console.log(`✅ Auto-confirmation check completed. ${confirmedCount} orders confirmed after 14 days.`);
-    return { success: true, confirmedCount };
+    console.log(`✅ Checked ${checkedCount} orders. ${confirmedCount} orders confirmed after 14 days.`);
+    return { success: true, confirmedCount, checkedCount };
   } catch (error) {
     console.error('❌ Error in auto-confirm function:', error);
     throw error;
@@ -160,6 +168,7 @@ async function getOrderStatistics() {
     let totalOrders = 0;
     let deliveredOrders = 0;
     let pendingAutoConfirm = 0;
+    let almostDueOrders = []; // Orders that will be auto-confirmed soon
 
     for (const userId in transactions) {
       for (const orderId in transactions[userId]) {
@@ -179,6 +188,17 @@ async function getOrderStatistics() {
               const timeSinceDelivered = currentTime - deliveredUpdate.timestamp;
               if (timeSinceDelivered < fourteenDays) {
                 pendingAutoConfirm++;
+                
+                // Check if order is close to due (within 1 day)
+                if (timeSinceDelivered > (13 * 24 * 60 * 60 * 1000)) {
+                  const hoursRemaining = Math.ceil((fourteenDays - timeSinceDelivered) / (60 * 60 * 1000));
+                  almostDueOrders.push({
+                    orderId,
+                    userId,
+                    daysDelivered: Math.round(timeSinceDelivered / (24 * 60 * 60 * 1000)),
+                    hoursRemaining
+                  });
+                }
               }
             }
           }
@@ -186,10 +206,10 @@ async function getOrderStatistics() {
       }
     }
 
-    return { totalOrders, deliveredOrders, pendingAutoConfirm };
+    return { totalOrders, deliveredOrders, pendingAutoConfirm, almostDueOrders };
   } catch (error) {
     console.error('Error getting order statistics:', error);
-    return { totalOrders: 0, deliveredOrders: 0, pendingAutoConfirm: 0 };
+    return { totalOrders: 0, deliveredOrders: 0, pendingAutoConfirm: 0, almostDueOrders: [] };
   }
 }
 
@@ -199,10 +219,34 @@ function generateId() {
          Math.random().toString(36).substring(2, 15);
 }
 
-// Schedule the task to run every 6 hours (more efficient for 14-day window)
-cron.schedule('0 */6 * * *', () => {
-  console.log('⏰ Scheduled auto-confirm job running...');
-  autoConfirmDeliveredOrders().catch(console.error);
+console.log('📅 Schedule Configuration:');
+console.log(`   - Order Checks: ${CHECK_INTERVAL} (Every 5 minutes)`);
+console.log(`   - Auto Updates: ${AUTO_UPDATE_INTERVAL} (Every 20 minutes)`);
+
+// Schedule 1: Check orders every 5 minutes (monitoring only)
+cron.schedule(CHECK_INTERVAL, () => {
+  console.log('🔍 [5-min Check] Scanning orders for monitoring...');
+  getOrderStatistics()
+    .then(stats => {
+      console.log(`📊 [5-min Check] Stats - Total: ${stats.totalOrders}, Delivered: ${stats.deliveredOrders}, Pending: ${stats.pendingAutoConfirm}`);
+      if (stats.almostDueOrders.length > 0) {
+        console.log(`⏰ [5-min Check] ${stats.almostDueOrders.length} orders almost due for auto-completion:`);
+        stats.almostDueOrders.forEach(order => {
+          console.log(`   - Order ${order.orderId}: ${order.daysDelivered} days delivered, ${order.hoursRemaining} hours remaining`);
+        });
+      }
+    })
+    .catch(console.error);
+});
+
+// Schedule 2: Auto-update orders every 20 minutes
+cron.schedule(AUTO_UPDATE_INTERVAL, () => {
+  console.log('🔄 [20-min Update] Running auto-confirmation process...');
+  autoConfirmDeliveredOrders()
+    .then(result => {
+      console.log(`✅ [20-min Update] Completed: ${result.confirmedCount} orders auto-confirmed`);
+    })
+    .catch(console.error);
 });
 
 // Manual trigger endpoint
@@ -213,7 +257,24 @@ app.post('/trigger-auto-confirm', async (req, res) => {
       success: true, 
       message: 'Auto-confirmation triggered manually',
       confirmedCount: result.confirmedCount,
+      checkedCount: result.checkedCount,
       timeframe: '14 days',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Quick check endpoint (lightweight monitoring)
+app.post('/quick-check', async (req, res) => {
+  try {
+    const stats = await getOrderStatistics();
+    res.json({
+      success: true,
+      message: 'Quick check completed',
+      statistics: stats,
+      nextAutoUpdate: 'in 20 minutes',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -228,7 +289,11 @@ app.get('/statistics', async (req, res) => {
     res.json({
       success: true,
       statistics: stats,
-      timeframe: '14 days auto-confirm',
+      schedule: {
+        checks: 'Every 5 minutes',
+        autoUpdates: 'Every 20 minutes',
+        timeframe: '14 days auto-confirm'
+      },
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -243,7 +308,11 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     service: 'Auto-Confirm Delivery Service',
     domain: 'smart-fit-ar.vercel.app',
-    timeframe: '14 days auto-completion'
+    timeframe: '14 days auto-completion',
+    schedule: {
+      checks: 'Every 5 minutes',
+      autoUpdates: 'Every 20 minutes'
+    }
   });
 });
 
@@ -254,8 +323,11 @@ app.get('/status', async (req, res) => {
     res.json({
       service: 'Auto-Confirm Delivery Service',
       status: 'running',
-      nextRun: 'Every 6 hours',
-      timeframe: '14 days after delivery',
+      schedule: {
+        orderChecks: 'Every 5 minutes',
+        autoUpdates: 'Every 20 minutes',
+        timeframe: '14 days after delivery'
+      },
       supportedDomains: ['https://smart-fit-ar.vercel.app'],
       statistics: stats,
       timestamp: new Date().toISOString()
@@ -271,14 +343,17 @@ app.get('/test-cors', (req, res) => {
     message: 'CORS is working!',
     yourDomain: 'smart-fit-ar.vercel.app',
     timeframe: '14 days auto-completion',
+    schedule: 'Checks every 5min, Updates every 20min',
     timestamp: new Date().toISOString()
   });
 });
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`⏰ Auto-confirm service started - will check every 6 hours`);
-  console.log(`📅 Timeframe: 14 days after delivery`);
+  console.log(`📅 Schedule Configuration:`);
+  console.log(`   🔍 Order Checks: Every 5 minutes`);
+  console.log(`   🔄 Auto Updates: Every 20 minutes`);
+  console.log(`   📅 Timeframe: 14 days after delivery`);
   console.log(`🌐 CORS enabled for: https://smart-fit-ar.vercel.app`);
 });
 
