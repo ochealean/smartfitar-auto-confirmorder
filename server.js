@@ -10,9 +10,8 @@ const PORT = process.env.PORT || 3000;
 const corsOptions = {
   origin: [
     'https://smart-fit-ar.vercel.app',
-    'https://smart-fit-ar.vercel.app/',
-    'http://localhost:3000', // for local development
-    'http://localhost:5500'  // common local dev server port
+    'http://localhost:3000',
+    'http://localhost:5500'
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
@@ -26,27 +25,49 @@ app.use(express.json());
 // Handle preflight requests
 app.options('*', cors(corsOptions));
 
-// Initialize Firebase Admin with your existing config
-const serviceAccount = {
-  type: "service_account",
-  project_id: "opportunity-9d3bf",
-  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-  private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-  client_email: process.env.FIREBASE_CLIENT_EMAIL,
-  client_id: process.env.FIREBASE_CLIENT_ID,
-  auth_uri: "https://accounts.google.com/o/oauth2/auth",
-  token_uri: "https://oauth2.googleapis.com/token",
-  auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-  client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL,
-  universe_domain: "googleapis.com"
-};
+// Initialize Firebase Admin - SIMPLIFIED APPROACH
+console.log('Initializing Firebase Admin...');
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://opportunity-9d3bf-default-rtdb.firebaseio.com"
-});
+// Method 1: Use environment variable for the entire service account JSON
+if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+  console.log('Using FIREBASE_SERVICE_ACCOUNT_JSON environment variable');
+  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    databaseURL: "https://opportunity-9d3bf-default-rtdb.firebaseio.com"
+  });
+} 
+// Method 2: Use individual environment variables
+else if (process.env.FIREBASE_PRIVATE_KEY) {
+  console.log('Using individual Firebase environment variables');
+  const serviceAccount = {
+    type: "service_account",
+    project_id: "opportunity-9d3bf",
+    private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+    private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    client_email: process.env.FIREBASE_CLIENT_EMAIL,
+    client_id: process.env.FIREBASE_CLIENT_ID,
+    auth_uri: "https://accounts.google.com/o/oauth2/auth",
+    token_uri: "https://oauth2.googleapis.com/token",
+    auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+    client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL
+  };
+  
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    databaseURL: "https://opportunity-9d3bf-default-rtdb.firebaseio.com"
+  });
+} else {
+  console.log('No Firebase credentials found. Using default initialization (for testing only)');
+  // This will only work if you're using Google Cloud environment with automatic credentials
+  admin.initializeApp({
+    credential: admin.credential.applicationDefault(),
+    databaseURL: "https://opportunity-9d3bf-default-rtdb.firebaseio.com"
+  });
+}
 
 const db = admin.database();
+console.log('Firebase Admin initialized successfully');
 
 // Function to auto-confirm delivered orders after 24 hours
 async function autoConfirmDeliveredOrders() {
@@ -58,11 +79,11 @@ async function autoConfirmDeliveredOrders() {
     
     if (!transactions) {
       console.log('No transactions found');
-      return;
+      return { success: true, confirmedCount: 0 };
     }
 
     const currentTime = Date.now();
-    const twentyFourHours = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+    const twentyFourHours = 24 * 60 * 60 * 1000;
 
     let confirmedCount = 0;
 
@@ -122,16 +143,19 @@ async function autoConfirmDeliveredOrders() {
   }
 }
 
-// Helper function to generate ID (similar to your client-side function)
+// Helper function to generate ID
 function generateId() {
   return Math.random().toString(36).substring(2, 15) + 
          Math.random().toString(36).substring(2, 15);
 }
 
 // Schedule the task to run every hour
-cron.schedule('0 * * * *', autoConfirmDeliveredOrders); // Run every hour at minute 0
+cron.schedule('0 * * * *', () => {
+  console.log('⏰ Scheduled auto-confirm job running...');
+  autoConfirmDeliveredOrders().catch(console.error);
+});
 
-// Manual trigger endpoint (for testing)
+// Manual trigger endpoint
 app.post('/trigger-auto-confirm', async (req, res) => {
   try {
     const result = await autoConfirmDeliveredOrders();
@@ -182,5 +206,8 @@ app.listen(PORT, () => {
   console.log(`🌐 CORS enabled for: https://smart-fit-ar.vercel.app`);
 });
 
-// Run immediately on startup (optional)
-autoConfirmDeliveredOrders();
+// Run immediately on startup
+setTimeout(() => {
+  console.log('Running initial auto-confirm check...');
+  autoConfirmDeliveredOrders().catch(console.error);
+}, 5000);
