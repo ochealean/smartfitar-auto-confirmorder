@@ -9,6 +9,11 @@ const PORT = process.env.PORT || 3000;
 // 🎯 SCHEDULE CONFIGURATION - EASILY MODIFY THESE TWO LINES!
 const CHECK_INTERVAL = '*/2 * * * *';      // Every 2 minutes (monitoring)
 const AUTO_UPDATE_INTERVAL = '*/10 * * * *'; // Every 10 minutes (actual updates)
+    
+// 🕐 TESTING: Change to 10 minutes instead of 14 days
+// Change back to 14 days after testing
+// const fourteenDays = 14 * 24 * 60 * 60 * 1000;
+const fourteenDays = 10 * 60 * 1000; // 10 minutes for testing
 
 // CORS configuration for your domain
 const corsOptions = {
@@ -50,10 +55,10 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
 const db = admin.database();
 console.log('Firebase Admin initialized successfully');
 
-// Function to auto-confirm delivered orders after 14 days
+// Function to auto-confirm delivered orders after 10 minutes (for testing)
 async function autoConfirmDeliveredOrders() {
   try {
-    console.log('🔍 Checking for delivered orders older than 14 days...');
+    console.log('🔍 Checking for delivered orders older than 10 minutes...');
     
     const snapshot = await db.ref('smartfit_AR_Database/transactions').once('value');
     const transactions = snapshot.val();
@@ -64,7 +69,6 @@ async function autoConfirmDeliveredOrders() {
     }
 
     const currentTime = Date.now();
-    const fourteenDays = 14 * 24 * 60 * 60 * 1000;
 
     let confirmedCount = 0;
     let checkedCount = 0;
@@ -86,6 +90,7 @@ async function autoConfirmDeliveredOrders() {
               
               if (timeSinceDelivered > fourteenDays) {
                 console.log(`🔄 Auto-confirming order ${orderId} for user ${userId}`);
+                console.log(`⏰ Order delivered ${Math.round(timeSinceDelivered / (60 * 1000))} minutes ago`);
                 
                 const autoConfirmId = generateId();
                 const autoConfirmTimestamp = Date.now();
@@ -93,19 +98,22 @@ async function autoConfirmDeliveredOrders() {
                 await db.ref(`smartfit_AR_Database/transactions/${userId}/${orderId}/statusUpdates/${autoConfirmId}`).set({
                   status: 'completed',
                   timestamp: autoConfirmTimestamp,
-                  message: 'Order automatically confirmed as completed after 14 days of delivery',
+                  message: 'Order automatically confirmed as completed after 10 minutes of delivery (TESTING)',
                   location: 'System Auto-Confirm',
                   addedBy: 'System',
                   addedById: 'auto-confirm-system',
                   createdAt: new Date().toISOString(),
                   isAutoConfirmed: true,
-                  daysSinceDelivery: Math.round(timeSinceDelivered / (24 * 60 * 60 * 1000))
+                  minutesSinceDelivery: Math.round(timeSinceDelivered / (60 * 1000))
                 });
                 
                 await db.ref(`smartfit_AR_Database/transactions/${userId}/${orderId}/status`).set('completed');
                 
-                console.log(`✅ Order ${orderId} auto-confirmed as completed after 14 days`);
+                console.log(`✅ Order ${orderId} auto-confirmed as completed after 10 minutes`);
                 confirmedCount++;
+              } else {
+                const minutesRemaining = Math.ceil((fourteenDays - timeSinceDelivered) / (60 * 1000));
+                console.log(`⏳ Order ${orderId} delivered ${Math.round(timeSinceDelivered / (60 * 1000))} minutes ago - ${minutesRemaining} minutes remaining`);
               }
             }
           }
@@ -113,7 +121,7 @@ async function autoConfirmDeliveredOrders() {
       }
     }
     
-    console.log(`✅ Checked ${checkedCount} orders. ${confirmedCount} orders confirmed after 14 days.`);
+    console.log(`✅ Checked ${checkedCount} orders. ${confirmedCount} orders confirmed after 10 minutes.`);
     return { success: true, confirmedCount, checkedCount };
   } catch (error) {
     console.error('❌ Error in auto-confirm function:', error);
@@ -132,7 +140,6 @@ async function getOrderStatistics() {
     }
 
     const currentTime = Date.now();
-    const fourteenDays = 14 * 24 * 60 * 60 * 1000;
     
     let totalOrders = 0;
     let deliveredOrders = 0;
@@ -156,6 +163,8 @@ async function getOrderStatistics() {
               const timeSinceDelivered = currentTime - deliveredUpdate.timestamp;
               if (timeSinceDelivered < fourteenDays) {
                 pendingAutoConfirm++;
+                const minutesRemaining = Math.ceil((fourteenDays - timeSinceDelivered) / (60 * 1000));
+                console.log(`⏳ Order ${orderId}: ${Math.round(timeSinceDelivered / (60 * 1000))} minutes delivered, ${minutesRemaining} minutes remaining`);
               }
             }
           }
@@ -179,6 +188,7 @@ function generateId() {
 console.log('📅 Schedule Configuration:');
 console.log(`   - Order Checks: ${CHECK_INTERVAL}`);
 console.log(`   - Auto Updates: ${AUTO_UPDATE_INTERVAL}`);
+console.log(`   - Timeframe: 10 minutes (TESTING MODE)`);
 
 // Schedule 1: Check orders (monitoring only)
 cron.schedule(CHECK_INTERVAL, () => {
@@ -209,7 +219,7 @@ app.post('/trigger-auto-confirm', async (req, res) => {
       message: 'Auto-confirmation triggered manually',
       confirmedCount: result.confirmedCount,
       checkedCount: result.checkedCount,
-      timeframe: '14 days',
+      timeframe: '10 minutes (TESTING)',
       schedule: {
         checks: CHECK_INTERVAL,
         updates: AUTO_UPDATE_INTERVAL
@@ -228,7 +238,7 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     service: 'Auto-Confirm Delivery Service',
     domain: 'smart-fit-ar.vercel.app',
-    timeframe: '14 days auto-completion',
+    timeframe: '10 minutes auto-completion (TESTING MODE)',
     schedule: {
       checks: CHECK_INTERVAL,
       updates: AUTO_UPDATE_INTERVAL
@@ -241,7 +251,7 @@ app.listen(PORT, () => {
   console.log(`📅 Schedule Configuration:`);
   console.log(`   🔍 Order Checks: ${CHECK_INTERVAL}`);
   console.log(`   🔄 Auto Updates: ${AUTO_UPDATE_INTERVAL}`);
-  console.log(`   📅 Timeframe: 14 days after delivery`);
+  console.log(`   🕐 Timeframe: 10 minutes after delivery (TESTING)`);
   console.log(`🌐 CORS enabled for: https://smart-fit-ar.vercel.app`);
 });
 
