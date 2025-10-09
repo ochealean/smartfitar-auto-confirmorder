@@ -6,14 +6,13 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 🎯 SCHEDULE CONFIGURATION - EASILY MODIFY THESE TWO LINES!
+// 🎯 SCHEDULE CONFIGURATION
 const CHECK_INTERVAL = '*/2 * * * *';      // Every 2 minutes (monitoring)
-const AUTO_UPDATE_INTERVAL = '*/10 * * * *'; // Every 10 minutes (actual updates)
+const AUTO_UPDATE_INTERVAL = '*/2 * * * *'; // Every 10 minutes (actual updates)
     
 // 🕐 TESTING: Change to 10 minutes instead of 14 days
-// Change back to 14 days after testing
-// const timeframe = 14 * 24 * 60 * 60 * 1000;
 const timeframe = 10 * 60 * 1000; // 10 minutes for testing
+// For production: const timeframe = 14 * 24 * 60 * 60 * 1000; // 14 days
 
 // CORS configuration for your domain
 const corsOptions = {
@@ -78,8 +77,10 @@ async function autoCompleteOutForDeliveryOrders() {
         checkedCount++;
         const order = transactions[userId][orderId];
         
-        // Look for "Out for Delivery" status instead of "delivered"
+        // Look for "Out for Delivery" status (case insensitive)
         if (order.status && order.status.toLowerCase() === 'out for delivery') {
+          console.log(`📦 Found "Out for Delivery" order: ${orderId}`);
+          
           if (order.statusUpdates) {
             const statusUpdates = Object.values(order.statusUpdates);
             const outForDeliveryUpdate = statusUpdates.find(update => 
@@ -88,10 +89,12 @@ async function autoCompleteOutForDeliveryOrders() {
 
             if (outForDeliveryUpdate && outForDeliveryUpdate.timestamp) {
               const timeSinceOutForDelivery = currentTime - outForDeliveryUpdate.timestamp;
+              const minutesSince = Math.round(timeSinceOutForDelivery / (60 * 1000));
+              
+              console.log(`⏰ Order ${orderId} has been "Out for Delivery" for ${minutesSince} minutes`);
               
               if (timeSinceOutForDelivery > timeframe) {
                 console.log(`🔄 Auto-completing order ${orderId} for user ${userId}`);
-                console.log(`⏰ Order out for delivery ${Math.round(timeSinceOutForDelivery / (60 * 1000))} minutes ago`);
                 
                 const autoCompleteId = generateId();
                 const autoCompleteTimestamp = Date.now();
@@ -100,25 +103,29 @@ async function autoCompleteOutForDeliveryOrders() {
                 await db.ref(`smartfit_AR_Database/transactions/${userId}/${orderId}/statusUpdates/${autoCompleteId}`).set({
                   status: 'completed',
                   timestamp: autoCompleteTimestamp,
-                  message: `Order automatically completed after ${timeframe / (60 * 1000)} minutes of being out for delivery (TESTING)`,
+                  message: `Order automatically completed after ${timeframe / (60 * 1000)} minutes of being out for delivery`,
                   location: 'System Auto-Complete',
                   addedBy: 'System',
                   addedById: 'auto-complete-system',
                   createdAt: new Date().toISOString(),
                   isAutoCompleted: true,
-                  minutesSinceOutForDelivery: Math.round(timeSinceOutForDelivery / (60 * 1000))
+                  minutesSinceOutForDelivery: minutesSince
                 });
                 
                 // Update main order status to "completed"
                 await db.ref(`smartfit_AR_Database/transactions/${userId}/${orderId}/status`).set('completed');
                 
-                console.log(`✅ Order ${orderId} auto-completed after ${timeframe / (60 * 1000)} minutes of being out for delivery`);
+                console.log(`✅ Order ${orderId} auto-completed after ${minutesSince} minutes of being out for delivery`);
                 completedCount++;
               } else {
                 const minutesRemaining = Math.ceil((timeframe - timeSinceOutForDelivery) / (60 * 1000));
-                console.log(`⏳ Order ${orderId} out for delivery ${Math.round(timeSinceOutForDelivery / (60 * 1000))} minutes ago - ${minutesRemaining} minutes remaining`);
+                console.log(`⏳ Order ${orderId} - ${minutesRemaining} minutes remaining until auto-completion`);
               }
+            } else {
+              console.log(`❌ Order ${orderId} has "Out for Delivery" status but no timestamp in status updates`);
             }
+          } else {
+            console.log(`❌ Order ${orderId} has "Out for Delivery" status but no status updates`);
           }
         }
       }
@@ -153,7 +160,7 @@ async function getOrderStatistics() {
         totalOrders++;
         const order = transactions[userId][orderId];
         
-        // Look for "Out for Delivery" status instead of "delivered"
+        // Look for "Out for Delivery" status (case insensitive)
         if (order.status && order.status.toLowerCase() === 'out for delivery') {
           outForDeliveryOrders++;
           
