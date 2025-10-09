@@ -12,8 +12,8 @@ const AUTO_UPDATE_INTERVAL = '*/10 * * * *'; // Every 10 minutes (actual updates
     
 // 🕐 TESTING: Change to 10 minutes instead of 14 days
 // Change back to 14 days after testing
-// const fourteenDays = 14 * 24 * 60 * 60 * 1000;
-const fourteenDays = 10 * 60 * 1000; // 10 minutes for testing
+// const timeframe = 14 * 24 * 60 * 60 * 1000;
+const timeframe = 10 * 60 * 1000; // 10 minutes for testing
 
 // CORS configuration for your domain
 const corsOptions = {
@@ -55,22 +55,22 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
 const db = admin.database();
 console.log('Firebase Admin initialized successfully');
 
-// Function to auto-confirm delivered orders after 10 minutes (for testing)
-async function autoConfirmDeliveredOrders() {
+// Function to auto-complete orders that have been "Out for Delivery" for the specified timeframe
+async function autoCompleteOutForDeliveryOrders() {
   try {
-    console.log('🔍 Checking for delivered orders older than 10 minutes...');
+    console.log(`🔍 Checking for "Out for Delivery" orders older than ${timeframe / (60 * 1000)} minutes...`);
     
     const snapshot = await db.ref('smartfit_AR_Database/transactions').once('value');
     const transactions = snapshot.val();
     
     if (!transactions) {
       console.log('No transactions found');
-      return { success: true, confirmedCount: 0 };
+      return { success: true, completedCount: 0 };
     }
 
     const currentTime = Date.now();
 
-    let confirmedCount = 0;
+    let completedCount = 0;
     let checkedCount = 0;
 
     for (const userId in transactions) {
@@ -78,42 +78,45 @@ async function autoConfirmDeliveredOrders() {
         checkedCount++;
         const order = transactions[userId][orderId];
         
-        if (order.status && order.status.toLowerCase() === 'delivered') {
+        // Look for "Out for Delivery" status instead of "delivered"
+        if (order.status && order.status.toLowerCase() === 'out for delivery') {
           if (order.statusUpdates) {
             const statusUpdates = Object.values(order.statusUpdates);
-            const deliveredUpdate = statusUpdates.find(update => 
-              update.status && update.status.toLowerCase() === 'delivered'
+            const outForDeliveryUpdate = statusUpdates.find(update => 
+              update.status && update.status.toLowerCase() === 'out for delivery'
             );
 
-            if (deliveredUpdate && deliveredUpdate.timestamp) {
-              const timeSinceDelivered = currentTime - deliveredUpdate.timestamp;
+            if (outForDeliveryUpdate && outForDeliveryUpdate.timestamp) {
+              const timeSinceOutForDelivery = currentTime - outForDeliveryUpdate.timestamp;
               
-              if (timeSinceDelivered > fourteenDays) {
-                console.log(`🔄 Auto-confirming order ${orderId} for user ${userId}`);
-                console.log(`⏰ Order delivered ${Math.round(timeSinceDelivered / (60 * 1000))} minutes ago`);
+              if (timeSinceOutForDelivery > timeframe) {
+                console.log(`🔄 Auto-completing order ${orderId} for user ${userId}`);
+                console.log(`⏰ Order out for delivery ${Math.round(timeSinceOutForDelivery / (60 * 1000))} minutes ago`);
                 
-                const autoConfirmId = generateId();
-                const autoConfirmTimestamp = Date.now();
+                const autoCompleteId = generateId();
+                const autoCompleteTimestamp = Date.now();
                 
-                await db.ref(`smartfit_AR_Database/transactions/${userId}/${orderId}/statusUpdates/${autoConfirmId}`).set({
+                // Add auto-completion status update
+                await db.ref(`smartfit_AR_Database/transactions/${userId}/${orderId}/statusUpdates/${autoCompleteId}`).set({
                   status: 'completed',
-                  timestamp: autoConfirmTimestamp,
-                  message: 'Order automatically confirmed as completed after 10 minutes of delivery (TESTING)',
-                  location: 'System Auto-Confirm',
+                  timestamp: autoCompleteTimestamp,
+                  message: `Order automatically completed after ${timeframe / (60 * 1000)} minutes of being out for delivery (TESTING)`,
+                  location: 'System Auto-Complete',
                   addedBy: 'System',
-                  addedById: 'auto-confirm-system',
+                  addedById: 'auto-complete-system',
                   createdAt: new Date().toISOString(),
-                  isAutoConfirmed: true,
-                  minutesSinceDelivery: Math.round(timeSinceDelivered / (60 * 1000))
+                  isAutoCompleted: true,
+                  minutesSinceOutForDelivery: Math.round(timeSinceOutForDelivery / (60 * 1000))
                 });
                 
+                // Update main order status to "completed"
                 await db.ref(`smartfit_AR_Database/transactions/${userId}/${orderId}/status`).set('completed');
                 
-                console.log(`✅ Order ${orderId} auto-confirmed as completed after 10 minutes`);
-                confirmedCount++;
+                console.log(`✅ Order ${orderId} auto-completed after ${timeframe / (60 * 1000)} minutes of being out for delivery`);
+                completedCount++;
               } else {
-                const minutesRemaining = Math.ceil((fourteenDays - timeSinceDelivered) / (60 * 1000));
-                console.log(`⏳ Order ${orderId} delivered ${Math.round(timeSinceDelivered / (60 * 1000))} minutes ago - ${minutesRemaining} minutes remaining`);
+                const minutesRemaining = Math.ceil((timeframe - timeSinceOutForDelivery) / (60 * 1000));
+                console.log(`⏳ Order ${orderId} out for delivery ${Math.round(timeSinceOutForDelivery / (60 * 1000))} minutes ago - ${minutesRemaining} minutes remaining`);
               }
             }
           }
@@ -121,10 +124,10 @@ async function autoConfirmDeliveredOrders() {
       }
     }
     
-    console.log(`✅ Checked ${checkedCount} orders. ${confirmedCount} orders confirmed after 10 minutes.`);
-    return { success: true, confirmedCount, checkedCount };
+    console.log(`✅ Checked ${checkedCount} orders. ${completedCount} orders auto-completed after ${timeframe / (60 * 1000)} minutes.`);
+    return { success: true, completedCount, checkedCount };
   } catch (error) {
-    console.error('❌ Error in auto-confirm function:', error);
+    console.error('❌ Error in auto-complete function:', error);
     throw error;
   }
 }
@@ -136,35 +139,36 @@ async function getOrderStatistics() {
     const transactions = snapshot.val();
     
     if (!transactions) {
-      return { totalOrders: 0, deliveredOrders: 0, pendingAutoConfirm: 0 };
+      return { totalOrders: 0, outForDeliveryOrders: 0, pendingAutoComplete: 0 };
     }
 
     const currentTime = Date.now();
     
     let totalOrders = 0;
-    let deliveredOrders = 0;
-    let pendingAutoConfirm = 0;
+    let outForDeliveryOrders = 0;
+    let pendingAutoComplete = 0;
 
     for (const userId in transactions) {
       for (const orderId in transactions[userId]) {
         totalOrders++;
         const order = transactions[userId][orderId];
         
-        if (order.status && order.status.toLowerCase() === 'delivered') {
-          deliveredOrders++;
+        // Look for "Out for Delivery" status instead of "delivered"
+        if (order.status && order.status.toLowerCase() === 'out for delivery') {
+          outForDeliveryOrders++;
           
           if (order.statusUpdates) {
             const statusUpdates = Object.values(order.statusUpdates);
-            const deliveredUpdate = statusUpdates.find(update => 
-              update.status && update.status.toLowerCase() === 'delivered'
+            const outForDeliveryUpdate = statusUpdates.find(update => 
+              update.status && update.status.toLowerCase() === 'out for delivery'
             );
 
-            if (deliveredUpdate && deliveredUpdate.timestamp) {
-              const timeSinceDelivered = currentTime - deliveredUpdate.timestamp;
-              if (timeSinceDelivered < fourteenDays) {
-                pendingAutoConfirm++;
-                const minutesRemaining = Math.ceil((fourteenDays - timeSinceDelivered) / (60 * 1000));
-                console.log(`⏳ Order ${orderId}: ${Math.round(timeSinceDelivered / (60 * 1000))} minutes delivered, ${minutesRemaining} minutes remaining`);
+            if (outForDeliveryUpdate && outForDeliveryUpdate.timestamp) {
+              const timeSinceOutForDelivery = currentTime - outForDeliveryUpdate.timestamp;
+              if (timeSinceOutForDelivery < timeframe) {
+                pendingAutoComplete++;
+                const minutesRemaining = Math.ceil((timeframe - timeSinceOutForDelivery) / (60 * 1000));
+                console.log(`⏳ Order ${orderId}: ${Math.round(timeSinceOutForDelivery / (60 * 1000))} minutes out for delivery, ${minutesRemaining} minutes remaining`);
               }
             }
           }
@@ -172,10 +176,10 @@ async function getOrderStatistics() {
       }
     }
 
-    return { totalOrders, deliveredOrders, pendingAutoConfirm };
+    return { totalOrders, outForDeliveryOrders, pendingAutoComplete };
   } catch (error) {
     console.error('Error getting order statistics:', error);
-    return { totalOrders: 0, deliveredOrders: 0, pendingAutoConfirm: 0 };
+    return { totalOrders: 0, outForDeliveryOrders: 0, pendingAutoComplete: 0 };
   }
 }
 
@@ -188,38 +192,38 @@ function generateId() {
 console.log('📅 Schedule Configuration:');
 console.log(`   - Order Checks: ${CHECK_INTERVAL}`);
 console.log(`   - Auto Updates: ${AUTO_UPDATE_INTERVAL}`);
-console.log(`   - Timeframe: 10 minutes (TESTING MODE)`);
+console.log(`   - Timeframe: ${timeframe / (60 * 1000)} minutes (TESTING MODE)`);
 
 // Schedule 1: Check orders (monitoring only)
 cron.schedule(CHECK_INTERVAL, () => {
   console.log(`🔍 [${CHECK_INTERVAL} Check] Scanning orders for monitoring...`);
   getOrderStatistics()
     .then(stats => {
-      console.log(`📊 [${CHECK_INTERVAL} Check] Stats - Total: ${stats.totalOrders}, Delivered: ${stats.deliveredOrders}, Pending: ${stats.pendingAutoConfirm}`);
+      console.log(`📊 [${CHECK_INTERVAL} Check] Stats - Total: ${stats.totalOrders}, Out for Delivery: ${stats.outForDeliveryOrders}, Pending: ${stats.pendingAutoComplete}`);
     })
     .catch(console.error);
 });
 
 // Schedule 2: Auto-update orders
 cron.schedule(AUTO_UPDATE_INTERVAL, () => {
-  console.log(`🔄 [${AUTO_UPDATE_INTERVAL} Update] Running auto-confirmation process...`);
-  autoConfirmDeliveredOrders()
+  console.log(`🔄 [${AUTO_UPDATE_INTERVAL} Update] Running auto-completion process...`);
+  autoCompleteOutForDeliveryOrders()
     .then(result => {
-      console.log(`✅ [${AUTO_UPDATE_INTERVAL} Update] Completed: ${result.confirmedCount} orders auto-confirmed`);
+      console.log(`✅ [${AUTO_UPDATE_INTERVAL} Update] Completed: ${result.completedCount} orders auto-completed`);
     })
     .catch(console.error);
 });
 
 // Manual trigger endpoint
-app.post('/trigger-auto-confirm', async (req, res) => {
+app.post('/trigger-auto-complete', async (req, res) => {
   try {
-    const result = await autoConfirmDeliveredOrders();
+    const result = await autoCompleteOutForDeliveryOrders();
     res.json({ 
       success: true, 
-      message: 'Auto-confirmation triggered manually',
-      confirmedCount: result.confirmedCount,
+      message: 'Auto-completion triggered manually',
+      completedCount: result.completedCount,
       checkedCount: result.checkedCount,
-      timeframe: '10 minutes (TESTING)',
+      timeframe: `${timeframe / (60 * 1000)} minutes (TESTING)`,
       schedule: {
         checks: CHECK_INTERVAL,
         updates: AUTO_UPDATE_INTERVAL
@@ -236,9 +240,9 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
-    service: 'Auto-Confirm Delivery Service',
+    service: 'Auto-Complete Delivery Service',
     domain: 'smart-fit-ar.vercel.app',
-    timeframe: '10 minutes auto-completion (TESTING MODE)',
+    timeframe: `${timeframe / (60 * 1000)} minutes auto-completion (TESTING MODE)`,
     schedule: {
       checks: CHECK_INTERVAL,
       updates: AUTO_UPDATE_INTERVAL
@@ -251,12 +255,12 @@ app.listen(PORT, () => {
   console.log(`📅 Schedule Configuration:`);
   console.log(`   🔍 Order Checks: ${CHECK_INTERVAL}`);
   console.log(`   🔄 Auto Updates: ${AUTO_UPDATE_INTERVAL}`);
-  console.log(`   🕐 Timeframe: 10 minutes after delivery (TESTING)`);
+  console.log(`   🕐 Timeframe: ${timeframe / (60 * 1000)} minutes after "Out for Delivery" (TESTING)`);
   console.log(`🌐 CORS enabled for: https://smart-fit-ar.vercel.app`);
 });
 
 // Run immediately on startup
 setTimeout(() => {
-  console.log('Running initial auto-confirm check...');
-  autoConfirmDeliveredOrders().catch(console.error);
+  console.log('Running initial auto-complete check...');
+  autoCompleteOutForDeliveryOrders().catch(console.error);
 }, 5000);
