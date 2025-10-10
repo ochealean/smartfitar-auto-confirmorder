@@ -7,11 +7,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // 🎯 SCHEDULE CONFIGURATION
-const CHECK_INTERVAL = '* * * * *';      // Every 1 minutes (monitoring)
-const AUTO_UPDATE_INTERVAL = '* * * * *'; // Every 1 minutes (actual updates)
+const CHECK_INTERVAL = '*/2 * * * *';      // Every 1 minutes (monitoring)
+const AUTO_UPDATE_INTERVAL = '*/2 * * * *'; // Every 1 minutes (actual updates)
     
 // 🕐 TESTING: Change to 10 minutes instead of 14 days
-const timeframe = 2 * 60 * 1000; // 2 minutes for testing
+const timeframe = 10 * 60 * 1000; // 2 minutes for testing
 // For production: const timeframe = 14 * 24 * 60 * 60 * 1000; // 14 days
 
 // CORS configuration for your domain
